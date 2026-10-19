@@ -1,11 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
+
 import '../lib/main.dart';
 
 void main() {
-  testWidgets('customer home renders in Arabic', (tester) async {
-    await tester.pumpWidget(const MaaCustomerApp(firebaseReady: false));
+  testWidgets('shows setup notice when Firebase is not configured', (tester) async {
+    await tester.pumpWidget(const MaaCustomerApp(session: null));
     await tester.pumpAndSettle();
-    expect(find.text('التوصيل إلى'), findsOneWidget);
-    expect(find.text('الرئيسية'), findsOneWidget);
+    expect(find.textContaining('Firebase'), findsOneWidget);
   });
 }
