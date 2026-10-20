@@ -239,6 +239,8 @@ class HomeView extends StatefulWidget {
 
 class _HomeViewState extends State<HomeView> {
   String search = '';
+  String cuisine = '';
+  bool showAll = false;
 
   @override
   Widget build(BuildContext context) {
@@ -329,9 +331,14 @@ class _HomeViewState extends State<HomeView> {
                         padding: EdgeInsets.all(30),
                         child: Center(child: CircularProgressIndicator()));
                   }
-                  final docs = snap.data!.docs.where((d) {
+                  final gov = '${session.profile['governorate'] ?? ''}';
+                  final active = snap.data!.docs.where((d) => d.data()['accountStatus'] == statusActive).toList();
+                  final cuisines = <String>{for (final d in active) if ('${d.data()['cuisine'] ?? ''}'.isNotEmpty) '${d.data()['cuisine']}'}.toList();
+                  final docs = active.where((d) {
                     final m = d.data();
-                    if (m['accountStatus'] != statusActive) return false;
+                    final g = '${m['governorate'] ?? ''}';
+                    if (gov.isNotEmpty && !showAll && g.isNotEmpty && g != gov) return false;
+                    if (cuisine.isNotEmpty && m['cuisine'] != cuisine) return false;
                     return search.isEmpty || '${m['name']}'.contains(search);
                   }).toList();
                   if (docs.isEmpty) {
@@ -341,8 +348,18 @@ class _HomeViewState extends State<HomeView> {
                             child: Text('لا توجد مطاعم متاحة الآن.',
                                 style: TextStyle(color: Colors.black54))));
                   }
-                  return Column(
-                      children: docs.map((d) {
+                  return Column(children: [
+                    if (cuisines.isNotEmpty)
+                      SizedBox(
+                          height: 46,
+                          child: ListView(scrollDirection: Axis.horizontal, children: [
+                            Padding(padding: const EdgeInsets.only(left: 8), child: ChoiceChip(label: const Text('الكل'), selected: cuisine.isEmpty, onSelected: (_) => setState(() => cuisine = ''))),
+                            for (final c in cuisines)
+                              Padding(padding: const EdgeInsets.only(left: 8), child: ChoiceChip(label: Text(c), selected: cuisine == c, onSelected: (_) => setState(() => cuisine = c))),
+                          ])),
+                    if (gov.isNotEmpty)
+                      Align(alignment: AlignmentDirectional.centerStart, child: TextButton(onPressed: () => setState(() => showAll = !showAll), child: Text(showAll ? 'عرض مطاعم $gov فقط' : 'عرض مطاعم كل المحافظات'))),
+                    ...docs.map((d) {
                     final m = d.data();
                     final open = m['accepting'] == 'مفتوح';
                     return RestaurantCard(
@@ -358,8 +375,9 @@ class _HomeViewState extends State<HomeView> {
                             ? '${m['prepTime'] ?? ''} • رسوم التوصيل ${maaMoney(maaNum(m['deliveryFee']))}'
                             : 'مغلق مؤقتًا',
                         open: open,
+                        logo: m['logoB64'] as String?,
                         onTap: () => widget.onOpenMenu(d.id, m));
-                  }).toList());
+                  })]);
                 },
               ),
             ]))),
@@ -376,7 +394,9 @@ class RestaurantCard extends StatelessWidget {
       required this.rating,
       required this.time,
       required this.open,
-      required this.onTap});
+      required this.onTap,
+      this.logo});
+  final String? logo;
   final String name, subtitle, rating, time;
   final bool open;
   final VoidCallback onTap;
@@ -389,14 +409,14 @@ class RestaurantCard extends StatelessWidget {
       child: ListTile(
           onTap: onTap,
           contentPadding: const EdgeInsets.all(10),
-          leading: Container(
-              width: 58,
-              height: 58,
-              decoration: BoxDecoration(
-                  color: (open ? coral : Colors.grey).withValues(alpha: .12),
-                  borderRadius: BorderRadius.circular(15)),
-              child: Icon(Icons.restaurant,
-                  color: open ? coral : Colors.grey, size: 30)),
+          leading: Opacity(
+              opacity: open ? 1 : .5,
+              child: MaaImage(
+                  b64: logo,
+                  width: 60,
+                  height: 60,
+                  radius: 15,
+                  color: open ? coral : Colors.grey)),
           title: Text(name,
               style: const TextStyle(fontWeight: FontWeight.w800, color: plum)),
           subtitle: Text(subtitle.isEmpty ? time : '$subtitle\n$time'),
@@ -475,13 +495,15 @@ class MenuPage extends StatelessWidget {
                           child: Text(
                               'عرض السلة (${cart.count}) • ${maaMoney(cart.subtotal)}'))))),
       body: ListView(padding: const EdgeInsets.all(18), children: [
-        Container(
-            height: 120,
-            decoration: BoxDecoration(
-                color: plum, borderRadius: BorderRadius.circular(22)),
-            child: const Center(
-                child: Icon(Icons.restaurant_menu,
-                    size: 64, color: Colors.white))),
+        Row(children: [
+          MaaImage(b64: restaurant['logoB64'] as String?, width: 76, height: 76, radius: 18, color: coral),
+          const SizedBox(width: 12),
+          Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('${restaurant['cuisine'] ?? ''}', style: const TextStyle(color: Colors.black54)),
+            Text('${restaurant['governorate'] ?? ''} ${restaurant['area'] ?? ''}', style: const TextStyle(color: Colors.black54, fontSize: 12)),
+          ])),
+        ]),
         const SizedBox(height: 14),
         Text('${restaurant['name']}',
             style: const TextStyle(
@@ -515,18 +537,49 @@ class MenuPage extends StatelessWidget {
                       child: Text('لم يضف المطعم أصنافًا بعد.',
                           style: TextStyle(color: Colors.black54))));
             }
-            return Column(
-                children: items.map((d) {
-              final m = d.data();
-              return MenuItem(
-                  title: '${m['name']}',
-                  subtitle: '${m['description'] ?? ''}',
-                  price: maaMoney(maaNum(m['price'])),
-                  onAdd: () => _add(context, d.id, m));
-            }).toList());
+            return _MenuSections(items: items, onAdd: (d) => _add(context, d.id, d.data()));
           },
         ),
       ]));
+}
+
+class _MenuSections extends StatefulWidget {
+  const _MenuSections({required this.items, required this.onAdd});
+  final List<QueryDocumentSnapshot<Map<String, dynamic>>> items;
+  final void Function(QueryDocumentSnapshot<Map<String, dynamic>>) onAdd;
+  @override
+  State<_MenuSections> createState() => _MenuSectionsState();
+}
+
+class _MenuSectionsState extends State<_MenuSections> {
+  String selected = '';
+  @override
+  Widget build(BuildContext context) {
+    final grouped = <String, List<QueryDocumentSnapshot<Map<String, dynamic>>>>{};
+    for (final d in widget.items) {
+      grouped.putIfAbsent('${d.data()['category'] ?? 'عام'}', () => []).add(d);
+    }
+    final names = grouped.keys.toList();
+    final shown = selected.isEmpty ? names : [selected];
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SizedBox(
+          height: 46,
+          child: ListView(scrollDirection: Axis.horizontal, children: [
+            Padding(padding: const EdgeInsets.only(left: 8), child: ChoiceChip(label: const Text('الكل'), selected: selected.isEmpty, onSelected: (_) => setState(() => selected = ''))),
+            for (final n in names) Padding(padding: const EdgeInsets.only(left: 8), child: ChoiceChip(label: Text(n), selected: selected == n, onSelected: (_) => setState(() => selected = n))),
+          ])),
+      for (final n in shown) ...[
+        Padding(padding: const EdgeInsets.only(top: 14, bottom: 2), child: Text(n, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: plum))),
+        for (final d in grouped[n]!)
+          MenuItem(
+              title: '${d.data()['name']}',
+              subtitle: '${d.data()['description'] ?? ''}',
+              price: maaMoney(maaNum(d.data()['price'])),
+              image: d.data()['imageB64'] as String?,
+              onAdd: () => widget.onAdd(d)),
+      ],
+    ]);
+  }
 }
 
 class MenuItem extends StatelessWidget {
@@ -535,7 +588,9 @@ class MenuItem extends StatelessWidget {
       required this.title,
       required this.subtitle,
       required this.price,
-      required this.onAdd});
+      required this.onAdd,
+      this.image});
+  final String? image;
   final String title, subtitle, price;
   final VoidCallback onAdd;
   @override
@@ -544,7 +599,7 @@ class MenuItem extends StatelessWidget {
       elevation: 0,
       margin: const EdgeInsets.only(top: 10),
       child: ListTile(
-          leading: const Icon(Icons.set_meal, color: coral, size: 34),
+          leading: MaaImage(b64: image, width: 62, height: 62, radius: 12, fallback: Icons.set_meal, color: coral),
           title:
               Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
           subtitle: Text(subtitle.isEmpty ? price : '$subtitle\n$price'),
@@ -632,6 +687,8 @@ class _CartPageState extends State<CartPage> {
         'restaurantUid': cart.restaurantUid,
         'restaurantId': rest['id'] ?? '',
         'restaurant': rest['name'] ?? '',
+        'governorate': rest['governorate'] ?? '',
+        'restaurantArea': rest['area'] ?? '',
         'driverUid': '',
         'driverId': '',
         'driver': '',
@@ -885,6 +942,16 @@ class _TrackedOrder extends StatelessWidget {
         const SizedBox(height: 8),
         for (var i = 0; i < maaOrderSteps.length; i++)
           StepLine(label: maaOrderSteps[i], done: i <= stepIndex),
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          if (driverUid.isNotEmpty)
+            FilledButton.icon(
+                onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => MaaOrderChatPage(session: session, orderId: '${order['id']}', title: 'محادثة مع السائق', accent: coral))),
+                style: FilledButton.styleFrom(backgroundColor: coral),
+                icon: const Icon(Icons.chat_bubble_outline),
+                label: const Text('دردشة مع السائق')),
+          OutlinedButton.icon(onPressed: () => maaFileComplaint(context, session, order), icon: const Icon(Icons.report_gmailerrorred), label: const Text('تقديم شكوى')),
+        ]),
       ]),
     );
   }
@@ -979,6 +1046,7 @@ class OrdersView extends StatelessWidget {
                                       style: const TextStyle(
                                           fontWeight: FontWeight.bold,
                                           color: plum)),
+                                  InkWell(onTap: () => maaFileComplaint(context, session, o), child: const Padding(padding: EdgeInsets.only(top: 4), child: Text('شكوى', style: TextStyle(color: Colors.black54, fontSize: 12)))),
                                   if (o['status'] == orderNew)
                                     InkWell(
                                         onTap: () => _cancel(context, o),
@@ -1003,6 +1071,8 @@ class AccountView extends StatelessWidget {
     final name = TextEditingController(text: session.name);
     final phone = TextEditingController(text: session.phone);
     final address = TextEditingController(text: session.address);
+    final area = TextEditingController(text: '${session.profile['area'] ?? ''}');
+    String governorate = '${session.profile['governorate'] ?? ''}';
     double? lat, lng;
     await showDialog<void>(
         context: context,
@@ -1020,6 +1090,13 @@ class AccountView extends StatelessWidget {
                       controller: phone,
                       keyboardType: TextInputType.phone,
                       decoration: const InputDecoration(labelText: 'الهاتف')),
+                  DropdownButtonFormField<String>(
+                      initialValue: governorate.isEmpty ? null : governorate,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: 'المحافظة'),
+                      items: [for (final g in maaGovernorates) DropdownMenuItem(value: g, child: Text(g))],
+                      onChanged: (v) => setLocal(() => governorate = v ?? '')),
+                  TextField(controller: area, decoration: const InputDecoration(labelText: 'المنطقة')),
                   TextField(
                       controller: address,
                       decoration:
@@ -1050,6 +1127,8 @@ class AccountView extends StatelessWidget {
                           'name': name.text.trim(),
                           'phone': phone.text.trim(),
                           'address': address.text.trim(),
+                          'governorate': governorate,
+                          'area': area.text.trim(),
                           if (lat != null) 'lat': lat,
                           if (lng != null) 'lng': lng,
                         };
